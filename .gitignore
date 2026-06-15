@@ -1,0 +1,45 @@
+# Игнорируем всё, кроме указанных файлов и папок
+*
+!*/
+!main.py
+!database_sqlite.py
+!.gitignore
+!sevilia.db
+
+# Но игнорируем конкретные ненужные .py файлы (перечислите их прямо здесь)
+2.py
+12.py
+55.py
+123.py
+454545.py
+frd.py
+gjfgtj.py
+авнвп.py
+вввввв.py
+гггггг.py
+еаавввввввввввввввввввв
+eaavehe.py
+enrrrr.py
+kkkk.py
+мессенджер.py
+овоов.py
+пппрп.py
+рорп.py
+рпоор.py
+руб3задание.py
+рубли.py
+уку.py
+№5.py
+BBB.py
+BBBBBB.py
+ввввв.py
+.gitignore.py   # на всякий случай
+
+# Игнорируем папки и служебные файлы
+.venv/
+__pycache__/
+.idea/
+*.pyc
+*.txt
+*.json
+*.csv
