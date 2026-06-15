@@ -2,7 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date
 from database_sqlite import SessionLocal, ReleaseCRUD, Release, User, DownloadStat
-
+from database_sqlite import init_db, seed_test_data
+init_db()
+seed_test_data()
 # ------------------------- ОКНО ЛОГИНА -------------------------
 class LoginWindow:
     def __init__(self):
