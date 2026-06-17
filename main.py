@@ -1,234 +1,477 @@
+"""
+Главный модуль приложения VaccinePro (SQLite)
+"""
 import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import date
-from database_sqlite import SessionLocal, ReleaseCRUD, Release, User, DownloadStat
-from database_sqlite import init_db, seed_test_data
-init_db()
-seed_test_data()
-# ------------------------- ОКНО ЛОГИНА -------------------------
+from tkinter import ttk, messagebox, simpledialog
+from datetime import datetime, date
+from db_config import get_session
+from repository import (
+    PatientRepository, VaccineRepository, ProcedureRepository,
+    VaccinationRepository, MedicalRecordRepository
+)
+
+# ---------- Окно авторизации (упрощённая) ----------
 class LoginWindow:
-    def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("Sevilia - Login")
-        self.window.geometry("400x500")
-        self.window.configure(bg="#2b2b2b")
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Авторизация - VaccinePro")
+        self.root.geometry("300x200")
+        self.root.resizable(False, False)
 
-        tk.Label(self.window, text="LOG IN", font=("Arial", 24, "bold"), fg="white", bg="#2b2b2b").pack(pady=40)
+        tk.Label(root, text="Логин:").pack(pady=5)
+        self.entry_login = tk.Entry(root)
+        self.entry_login.pack(pady=5)
 
-        tk.Label(self.window, text="Enter email or username", font=("Arial", 10), fg="gray", bg="#2b2b2b").pack(anchor="w", padx=50)
-        self.entry_user = tk.Entry(self.window, font=("Arial", 14), bd=0, relief="flat")
-        self.entry_user.pack(fill="x", padx=50, pady=5)
-        self.entry_user.insert(0, "admin")
+        tk.Label(root, text="Пароль:").pack(pady=5)
+        self.entry_password = tk.Entry(root, show="*")
+        self.entry_password.pack(pady=5)
 
-        tk.Label(self.window, text="Enter password", font=("Arial", 10), fg="gray", bg="#2b2b2b").pack(anchor="w", padx=50, pady=(20,0))
-        self.entry_pass = tk.Entry(self.window, font=("Arial", 14), show="*", bd=0, relief="flat")
-        self.entry_pass.pack(fill="x", padx=50, pady=5)
-        self.entry_pass.insert(0, "admin123")
+        tk.Button(root, text="Войти", command=self.login).pack(pady=20)
 
-        tk.Button(self.window, text="Enter", command=self.check_login, font=("Arial", 12), bg="#4c9aff", fg="white", bd=0, padx=20, pady=8).pack(pady=30)
+    def login(self):
+        login = self.entry_login.get()
+        password = self.entry_password.get()
+        # Фиксированные роли для демонстрации
+        if login == "admin" and password == "admin123":
+            role = "admin"
+        elif login == "nurse" and password == "nurse123":
+            role = "nurse"
+        elif login == "doctor" and password == "doctor123":
+            role = "doctor"
+        else:
+            messagebox.showerror("Ошибка", "Неверный логин или пароль")
+            return
 
-        create_lbl = tk.Label(self.window, text="Create Account", font=("Arial", 10), fg="#4c9aff", bg="#2b2b2b", cursor="hand2")
-        create_lbl.pack()
-        create_lbl.bind("<Button-1>", lambda e: messagebox.showinfo("Info", "Demo: используйте admin/admin123"))
+        self.root.destroy()
+        root_main = tk.Tk()
+        app = MainApp(root_main, role)
+        root_main.mainloop()
 
-        tk.Button(self.window, text="Google", font=("Arial", 10), bg="#dd4b39", fg="white", bd=0, padx=20, pady=5).pack(pady=10)
+# ---------- Главное приложение ----------
+class MainApp:
+    def __init__(self, root, role):
+        self.root = root
+        self.role = role
+        self.root.title(f"VaccinePro - {role.capitalize()}")
+        self.root.geometry("900x600")
 
-        self.window.mainloop()
+        # Меню
+        menubar = tk.Menu(root)
+        root.config(menu=menubar)
 
-    def check_login(self):
-        username = self.entry_user.get().strip()
-        password = self.entry_pass.get().strip()
-        with SessionLocal() as session:
-            user = session.query(User).filter_by(username=username).first()
-            if user and user.password_hash == password:
-                messagebox.showinfo("Успех", f"Добро пожаловать, {username}!")
-                self.window.destroy()
-                MainWindow()
-            else:
-                messagebox.showerror("Ошибка", "Неверное имя пользователя или пароль")
+        patient_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Пациенты", menu=patient_menu)
+        patient_menu.add_command(label="Список пациентов", command=self.show_patients)
+        patient_menu.add_command(label="Добавить пациента", command=self.add_patient)
 
-# ------------------------- ГЛАВНОЕ ОКНО -------------------------
-class MainWindow:
-    def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("Sevilia - Python Community Stats")
-        self.window.geometry("800x600")
-        self.window.configure(bg="#f0f0f0")
+        vacc_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Вакцинация", menu=vacc_menu)
+        vacc_menu.add_command(label="Зарегистрировать вакцинацию", command=self.add_vaccination)
+        vacc_menu.add_command(label="История вакцинаций", command=self.show_vaccinations)
 
-        tk.Label(self.window, text="python™", font=("Arial", 48, "bold"), fg="#4c9aff", bg="#f0f0f0").pack(pady=20)
-        slogan = tk.Label(self.window, text="Billions of users around the world start using it right now\nby becoming part of the community",
-                          font=("Arial", 12), justify="center", bg="#f0f0f0")
-        slogan.pack(pady=10)
+        proc_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Медпроцедуры", menu=proc_menu)
+        proc_menu.add_command(label="Добавить запись о процедуре", command=self.add_medical_record)
+        proc_menu.add_command(label="История процедур", command=self.show_medical_records)
 
-        tk.Button(self.window, text="Start using it right now!", command=self.go_to_releases, font=("Arial", 12),
-                  bg="#4c9aff", fg="white", bd=0, padx=20, pady=8).pack(pady=20)
+        report_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Отчёты", menu=report_menu)
+        report_menu.add_command(label="Пациенты, требующие ревакцинации", command=self.show_revaccination_report)
 
-        self.frame_stats = tk.Frame(self.window, bg="#f0f0f0")
-        self.frame_stats.pack(pady=30)
-        self.update_stats()
+        self.status = tk.Label(root, text="Готов", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        self.status.pack(side=tk.BOTTOM, fill=tk.X)
 
-        tk.Button(self.window, text="Manage Python Releases", command=self.go_to_releases, font=("Arial", 10),
-                  bg="#333", fg="white", bd=0, padx=15, pady=5).pack()
+        self.main_frame = tk.Frame(root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.window.mainloop()
+        tk.Label(self.main_frame, text=f"Добро пожаловать, {role}!", font=("Arial", 16)).pack(pady=50)
+        tk.Label(self.main_frame, text="Используйте меню для работы с системой.").pack()
 
-    def update_stats(self):
-        for widget in self.frame_stats.winfo_children():
+    def set_status(self, msg):
+        self.status.config(text=msg)
+
+    def clear_frame(self):
+        for widget in self.main_frame.winfo_children():
             widget.destroy()
 
-        with SessionLocal() as session:
-            releases_count = session.query(Release).count()
-            total_downloads = session.query(DownloadStat).with_entities(DownloadStat.count).all()
-            total_downloads = sum(d[0] for d in total_downloads) if total_downloads else 10000000
-            import random
-            online = random.randint(200000, 300000)
+    # ---------- Пациенты ----------
+    def show_patients(self):
+        self.clear_frame()
+        session = get_session()
+        patients = PatientRepository.get_all(session)
+        session.close()
 
-        stats = [
-            ("Users online", f"{online:,}", "#4c9aff"),
-            ("Downloaded", f"{total_downloads:,} mln+", "#4c9aff"),
-            ("Files created", f"{releases_count * 200:,}", "#4c9aff")
-        ]
-        for title, value, color in stats:
-            frame = tk.Frame(self.frame_stats, bg="#ffffff", relief="ridge", bd=1)
-            frame.pack(side="left", padx=20, ipadx=20, ipady=10)
-            tk.Label(frame, text=title, font=("Arial", 10), fg="gray", bg="#ffffff").pack()
-            tk.Label(frame, text=value, font=("Arial", 24, "bold"), fg=color, bg="#ffffff").pack()
+        frame = self.main_frame
+        tk.Label(frame, text="Список пациентов", font=("Arial", 14)).pack(pady=5)
 
-    def go_to_releases(self):
-        self.window.destroy()
-        ReleasesWindow()
+        columns = ('ID', 'ФИО', 'Дата рождения', 'Телефон', 'СНИЛС')
+        tree = ttk.Treeview(frame, columns=columns, show='headings')
+        for col in columns:
+            tree.heading(col, text=col)
+        for p in patients:
+            tree.insert('', tk.END, values=(p.id, p.full_name, p.birth_date, p.phone, p.snils))
+        tree.pack(fill=tk.BOTH, expand=True, pady=5)
 
-# ------------------------- ОКНО ТАБЛИЦЫ РЕЛИЗОВ (CRUD) -------------------------
-class ReleasesWindow:
-    def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("Sevilia - Active Python Releases")
-        self.window.geometry("800x500")
-        self.window.configure(bg="#f0f0f0")
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=5)
 
-        tk.Label(self.window, text="Active Python Releases", font=("Arial", 18, "bold"), bg="#f0f0f0").pack(pady=10)
-        tk.Label(self.window, text="For more information visit the Python Developer's Guide.", font=("Arial", 10), bg="#f0f0f0").pack()
+        def edit_patient():
+            selected = tree.selection()
+            if not selected:
+                messagebox.showwarning("Внимание", "Выберите пациента")
+                return
+            patient_id = tree.item(selected[0])['values'][0]
+            self.edit_patient_form(patient_id)
 
-        columns = ("version", "status", "first_released")
-        self.tree = ttk.Treeview(self.window, columns=columns, show="headings", height=12)
-        self.tree.heading("version", text="Python version")
-        self.tree.heading("status", text="Maintenance status")
-        self.tree.heading("first_released", text="First released")
-        self.tree.column("version", width=120)
-        self.tree.column("status", width=180)
-        self.tree.column("first_released", width=120)
-        self.tree.pack(pady=10, fill="both", expand=True)
+        def delete_patient():
+            selected = tree.selection()
+            if not selected:
+                messagebox.showwarning("Внимание", "Выберите пациента")
+                return
+            patient_id = tree.item(selected[0])['values'][0]
+            if messagebox.askyesno("Удаление", "Удалить пациента и все его записи?"):
+                session = get_session()
+                PatientRepository.delete(session, patient_id)
+                session.close()
+                self.show_patients()
+                self.set_status("Пациент удалён")
 
-        frame_btns = tk.Frame(self.window, bg="#f0f0f0")
-        frame_btns.pack(pady=10)
-        tk.Button(frame_btns, text="Добавить", command=self.add_release, bg="#4c9aff", fg="white", padx=10).pack(side="left", padx=10)
-        tk.Button(frame_btns, text="Редактировать", command=self.edit_release, bg="#ffa500", fg="white", padx=10).pack(side="left", padx=10)
-        tk.Button(frame_btns, text="Удалить", command=self.delete_release, bg="#dc3545", fg="white", padx=10).pack(side="left", padx=10)
-        tk.Button(frame_btns, text="Обновить", command=self.load_data, bg="#28a745", fg="white", padx=10).pack(side="left", padx=10)
-        tk.Button(frame_btns, text="На главную", command=self.back_to_main, bg="#333", fg="white", padx=10).pack(side="left", padx=10)
+        tk.Button(btn_frame, text="Редактировать", command=edit_patient).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Удалить", command=delete_patient).pack(side=tk.LEFT, padx=5)
 
-        self.load_data()
-        self.window.mainloop()
+    def add_patient(self):
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text="Добавление пациента", font=("Arial", 14)).pack(pady=5)
 
-    def load_data(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        with SessionLocal() as session:
-            releases = ReleaseCRUD.get_all(session)
-            for rel in releases:
-                self.tree.insert("", "end", values=(rel.version, rel.status, rel.first_released))
+        tk.Label(frame, text="ФИО:").pack()
+        entry_name = tk.Entry(frame, width=50)
+        entry_name.pack(pady=2)
 
-    def add_release(self):
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Добавить релиз")
-        dialog.geometry("300x250")
-        dialog.grab_set()
+        tk.Label(frame, text="Дата рождения (ГГГГ-ММ-ДД):").pack()
+        entry_birth = tk.Entry(frame, width=20)
+        entry_birth.pack(pady=2)
 
-        tk.Label(dialog, text="Версия (например, 3.15)").pack(pady=5)
-        version_entry = tk.Entry(dialog)
-        version_entry.pack()
+        tk.Label(frame, text="Телефон:").pack()
+        entry_phone = tk.Entry(frame, width=30)
+        entry_phone.pack(pady=2)
 
-        tk.Label(dialog, text="Статус (pre-release/bugfix/security)").pack(pady=5)
-        status_entry = tk.Entry(dialog)
-        status_entry.pack()
-
-        tk.Label(dialog, text="Дата (ГГГГ-ММ-ДД)").pack(pady=5)
-        date_entry = tk.Entry(dialog)
-        date_entry.pack()
+        tk.Label(frame, text="СНИЛС:").pack()
+        entry_snils = tk.Entry(frame, width=20)
+        entry_snils.pack(pady=2)
 
         def save():
+            name = entry_name.get().strip()
+            birth_str = entry_birth.get().strip()
+            phone = entry_phone.get().strip()
+            snils = entry_snils.get().strip()
+            if not name or not birth_str:
+                messagebox.showerror("Ошибка", "ФИО и дата рождения обязательны")
+                return
             try:
-                with SessionLocal() as session:
-                    ReleaseCRUD.create(session, version_entry.get(), status_entry.get(), date.fromisoformat(date_entry.get()))
-                dialog.destroy()
-                self.load_data()
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
-        tk.Button(dialog, text="Сохранить", command=save).pack(pady=15)
+                birth_date = datetime.strptime(birth_str, "%Y-%m-%d").date()
+            except:
+                messagebox.showerror("Ошибка", "Неверный формат даты")
+                return
+            session = get_session()
+            PatientRepository.add(session, name, birth_date, phone, snils)
+            session.close()
+            self.set_status("Пациент добавлен")
+            self.show_patients()
 
-    def edit_release(self):
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+        tk.Button(frame, text="Сохранить", command=save).pack(pady=10)
+
+    def edit_patient_form(self, patient_id):
+        session = get_session()
+        patient = PatientRepository.get_by_id(session, patient_id)
+        session.close()
+        if not patient:
+            messagebox.showerror("Ошибка", "Пациент не найден")
             return
-        item = self.tree.item(selected[0])
-        old_version = item['values'][0]
-        old_status = item['values'][1]
-        old_date = item['values'][2]
 
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Редактировать релиз")
-        dialog.geometry("300x250")
-        dialog.grab_set()
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text=f"Редактирование пациента ID {patient_id}", font=("Arial", 14)).pack(pady=5)
 
-        tk.Label(dialog, text="Версия").pack()
-        version_entry = tk.Entry(dialog)
-        version_entry.insert(0, old_version)
-        version_entry.pack()
+        tk.Label(frame, text="ФИО:").pack()
+        entry_name = tk.Entry(frame, width=50)
+        entry_name.insert(0, patient.full_name)
+        entry_name.pack(pady=2)
 
-        tk.Label(dialog, text="Статус").pack()
-        status_entry = tk.Entry(dialog)
-        status_entry.insert(0, old_status)
-        status_entry.pack()
+        tk.Label(frame, text="Дата рождения (ГГГГ-ММ-ДД):").pack()
+        entry_birth = tk.Entry(frame, width=20)
+        entry_birth.insert(0, patient.birth_date.isoformat())
+        entry_birth.pack(pady=2)
 
-        tk.Label(dialog, text="Дата (ГГГГ-ММ-ДД)").pack()
-        date_entry = tk.Entry(dialog)
-        date_entry.insert(0, str(old_date))
-        date_entry.pack()
+        tk.Label(frame, text="Телефон:").pack()
+        entry_phone = tk.Entry(frame, width=30)
+        entry_phone.insert(0, patient.phone or "")
+        entry_phone.pack(pady=2)
 
-        def update():
+        tk.Label(frame, text="СНИЛС:").pack()
+        entry_snils = tk.Entry(frame, width=20)
+        entry_snils.insert(0, patient.snils or "")
+        entry_snils.pack(pady=2)
+
+        def save():
+            name = entry_name.get().strip()
+            birth_str = entry_birth.get().strip()
+            phone = entry_phone.get().strip()
+            snils = entry_snils.get().strip()
+            if not name or not birth_str:
+                messagebox.showerror("Ошибка", "ФИО и дата рождения обязательны")
+                return
             try:
-                with SessionLocal() as session:
-                    rel = session.query(Release).filter_by(version=old_version).first()
-                    if rel:
-                        rel.version = version_entry.get()
-                        rel.status = status_entry.get()
-                        rel.first_released = date.fromisoformat(date_entry.get())
-                        session.commit()
-                dialog.destroy()
-                self.load_data()
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
-        tk.Button(dialog, text="Обновить", command=update).pack(pady=15)
+                birth_date = datetime.strptime(birth_str, "%Y-%m-%d").date()
+            except:
+                messagebox.showerror("Ошибка", "Неверный формат даты")
+                return
+            session = get_session()
+            PatientRepository.update(session, patient_id,
+                                      full_name=name, birth_date=birth_date,
+                                      phone=phone, snils=snils)
+            session.close()
+            self.set_status("Данные обновлены")
+            self.show_patients()
 
-    def delete_release(self):
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+        tk.Button(frame, text="Сохранить", command=save).pack(pady=10)
+
+    # ---------- Вакцинация ----------
+    def add_vaccination(self):
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text="Регистрация вакцинации", font=("Arial", 14)).pack(pady=5)
+
+        session = get_session()
+        patients = PatientRepository.get_all(session)
+        vaccines = VaccineRepository.get_all(session)
+        session.close()
+
+        if not patients:
+            messagebox.showerror("Ошибка", "Нет пациентов. Сначала добавьте пациента.")
             return
-        if messagebox.askyesno("Подтверждение", "Удалить выбранную версию?"):
-            version = self.tree.item(selected[0])['values'][0]
-            with SessionLocal() as session:
-                rel = session.query(Release).filter_by(version=version).first()
-                if rel:
-                    session.delete(rel)
-                    session.commit()
-            self.load_data()
+        if not vaccines:
+            messagebox.showerror("Ошибка", "Нет вакцин. Запустите init_db.py для создания справочников.")
+            return
 
-    def back_to_main(self):
-        self.window.destroy()
-        MainWindow()
+        patient_names = {f"{p.id} - {p.full_name}": p.id for p in patients}
+        vaccine_names = {f"{v.id} - {v.name}": v.id for v in vaccines}
 
-# ------------------------- ЗАПУСК -------------------------
+        tk.Label(frame, text="Пациент:").pack()
+        combo_patient = ttk.Combobox(frame, values=list(patient_names.keys()), width=50)
+        combo_patient.pack(pady=2)
+
+        tk.Label(frame, text="Вакцина:").pack()
+        combo_vaccine = ttk.Combobox(frame, values=list(vaccine_names.keys()), width=50)
+        combo_vaccine.pack(pady=2)
+
+        tk.Label(frame, text="Доза (мл):").pack()
+        entry_dose = tk.Entry(frame)
+        entry_dose.pack(pady=2)
+
+        tk.Label(frame, text="Серия:").pack()
+        entry_series = tk.Entry(frame, width=30)
+        entry_series.pack(pady=2)
+
+        tk.Label(frame, text="Дата (ГГГГ-ММ-ДД):").pack()
+        entry_date = tk.Entry(frame, width=20)
+        entry_date.insert(0, date.today().isoformat())
+        entry_date.pack(pady=2)
+
+        def save():
+            patient_key = combo_patient.get()
+            vaccine_key = combo_vaccine.get()
+            dose_str = entry_dose.get().strip()
+            series = entry_series.get().strip()
+            date_str = entry_date.get().strip()
+            if not patient_key or not vaccine_key or not dose_str or not date_str:
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
+            try:
+                dose = float(dose_str)
+                if dose <= 0:
+                    raise ValueError
+            except:
+                messagebox.showerror("Ошибка", "Доза должна быть положительным числом")
+                return
+            try:
+                date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except:
+                messagebox.showerror("Ошибка", "Неверный формат даты")
+                return
+            patient_id = patient_names[patient_key]
+            vaccine_id = vaccine_names[vaccine_key]
+            session = get_session()
+            VaccinationRepository.add(session, patient_id, vaccine_id, dose, series, date_val)
+            session.close()
+            self.set_status("Вакцинация добавлена")
+            messagebox.showinfo("Успех", "Вакцинация зарегистрирована")
+
+        tk.Button(frame, text="Сохранить", command=save).pack(pady=10)
+
+    def show_vaccinations(self):
+        patient_id = self.select_patient()
+        if patient_id is None:
+            return
+        session = get_session()
+        vaccinations = VaccinationRepository.get_by_patient(session, patient_id)
+        session.close()
+
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text=f"История вакцинаций пациента ID {patient_id}", font=("Arial", 14)).pack(pady=5)
+
+        if not vaccinations:
+            tk.Label(frame, text="Нет записей о вакцинации").pack()
+            return
+
+        columns = ('ID', 'Вакцина', 'Доза', 'Серия', 'Дата')
+        tree = ttk.Treeview(frame, columns=columns, show='headings')
+        for col in columns:
+            tree.heading(col, text=col)
+        for v in vaccinations:
+            tree.insert('', tk.END, values=(v.id, v.vaccine.name, v.dose, v.series, v.date))
+        tree.pack(fill=tk.BOTH, expand=True, pady=5)
+
+    # ---------- Медицинские процедуры ----------
+    def add_medical_record(self):
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text="Добавление медицинской процедуры", font=("Arial", 14)).pack(pady=5)
+
+        session = get_session()
+        patients = PatientRepository.get_all(session)
+        procedures = ProcedureRepository.get_all(session)
+        session.close()
+
+        if not patients or not procedures:
+            messagebox.showerror("Ошибка", "Нет пациентов или процедур. Добавьте их сначала.")
+            return
+
+        patient_names = {f"{p.id} - {p.full_name}": p.id for p in patients}
+        procedure_names = {f"{pr.id} - {pr.name}": pr.id for pr in procedures}
+
+        tk.Label(frame, text="Пациент:").pack()
+        combo_patient = ttk.Combobox(frame, values=list(patient_names.keys()), width=50)
+        combo_patient.pack(pady=2)
+
+        tk.Label(frame, text="Процедура:").pack()
+        combo_proc = ttk.Combobox(frame, values=list(procedure_names.keys()), width=50)
+        combo_proc.pack(pady=2)
+
+        tk.Label(frame, text="Врач:").pack()
+        entry_doctor = tk.Entry(frame, width=50)
+        entry_doctor.pack(pady=2)
+
+        tk.Label(frame, text="Диагноз:").pack()
+        entry_diagnosis = tk.Entry(frame, width=50)
+        entry_diagnosis.pack(pady=2)
+
+        tk.Label(frame, text="Дата (ГГГГ-ММ-ДД):").pack()
+        entry_date = tk.Entry(frame, width=20)
+        entry_date.insert(0, date.today().isoformat())
+        entry_date.pack(pady=2)
+
+        def save():
+            patient_key = combo_patient.get()
+            proc_key = combo_proc.get()
+            doctor = entry_doctor.get().strip()
+            diagnosis = entry_diagnosis.get().strip()
+            date_str = entry_date.get().strip()
+            if not patient_key or not proc_key or not doctor or not date_str:
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
+            try:
+                date_val = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except:
+                messagebox.showerror("Ошибка", "Неверный формат даты")
+                return
+            patient_id = patient_names[patient_key]
+            proc_id = procedure_names[proc_key]
+            session = get_session()
+            MedicalRecordRepository.add(session, patient_id, proc_id, doctor, diagnosis, date_val)
+            session.close()
+            self.set_status("Запись добавлена")
+            messagebox.showinfo("Успех", "Медицинская процедура добавлена")
+
+        tk.Button(frame, text="Сохранить", command=save).pack(pady=10)
+
+    def show_medical_records(self):
+        patient_id = self.select_patient()
+        if patient_id is None:
+            return
+        session = get_session()
+        records = MedicalRecordRepository.get_by_patient(session, patient_id)
+        session.close()
+
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text=f"История процедур пациента ID {patient_id}", font=("Arial", 14)).pack(pady=5)
+
+        if not records:
+            tk.Label(frame, text="Нет записей о процедурах").pack()
+            return
+
+        columns = ('ID', 'Процедура', 'Врач', 'Диагноз', 'Дата')
+        tree = ttk.Treeview(frame, columns=columns, show='headings')
+        for col in columns:
+            tree.heading(col, text=col)
+        for r in records:
+            tree.insert('', tk.END, values=(r.id, r.procedure.name, r.doctor_name, r.diagnosis, r.date))
+        tree.pack(fill=tk.BOTH, expand=True, pady=5)
+
+    # ---------- Вспомогательные ----------
+    def select_patient(self):
+        session = get_session()
+        patients = PatientRepository.get_all(session)
+        session.close()
+        if not patients:
+            messagebox.showerror("Ошибка", "Нет пациентов")
+            return None
+        patient_names = {f"{p.id} - {p.full_name}": p.id for p in patients}
+        choice = simpledialog.askstring("Выбор пациента", "Введите ID или имя пациента (из списка):\n" + "\n".join(patient_names.keys()))
+        if not choice:
+            return None
+        for key, pid in patient_names.items():
+            if choice.strip() in key:
+                return pid
+        messagebox.showerror("Ошибка", "Пациент не найден")
+        return None
+
+    # ---------- Отчёт "Ревакцинация" ----------
+    def show_revaccination_report(self):
+        self.clear_frame()
+        frame = self.main_frame
+        tk.Label(frame, text="Пациенты, которым нужна ревакцинация", font=("Arial", 14)).pack(pady=5)
+
+        session = get_session()
+        today = date.today()
+        patients = PatientRepository.get_all(session)
+        results = []
+        for p in patients:
+            vaccs = VaccinationRepository.get_by_patient(session, p.id)
+            if vaccs:
+                last = max(vaccs, key=lambda v: v.date)
+                vaccine = last.vaccine
+                next_date = last.date + timedelta(days=vaccine.min_interval_days)
+                if next_date <= today:
+                    results.append((p.full_name, last.vaccine.name, last.date, next_date))
+        session.close()
+
+        if not results:
+            tk.Label(frame, text="Все пациенты вакцинированы в срок, ревакцинация не требуется.").pack()
+            return
+
+        columns = ('Пациент', 'Последняя вакцина', 'Дата', 'Рекомендуемая дата')
+        tree = ttk.Treeview(frame, columns=columns, show='headings')
+        for col in columns:
+            tree.heading(col, text=col)
+        for row in results:
+            tree.insert('', tk.END, values=row)
+        tree.pack(fill=tk.BOTH, expand=True, pady=5)
+
+# ---------- Запуск ----------
 if __name__ == "__main__":
-    LoginWindow()
+    root = tk.Tk()
+    login = LoginWindow(root)
+    root.mainloop()
